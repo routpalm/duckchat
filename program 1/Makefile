@@ -1,16 +1,22 @@
-CC=g++
+CC=gcc
+CFLAGS=-Wall -W -g -Werror
 
-CFLAGS=-Wall -W -g -Werror 
+all: my_client my_server
 
+my_client: client.o raw.o
+	$(CC) client.o raw.o $(CFLAGS) -o my_client
 
+my_server: server.o
+	$(CC) server.o $(CFLAGS) -o my_server
 
-all: client server
+client.o: client.c
+	$(CC) $(CFLAGS) -c client.c
 
-client: client.c raw.c
-	$(CC) client.c raw.c $(CFLAGS) -o client
+raw.o: raw.c
+	$(CC) $(CFLAGS) -c raw.c
 
-server: server.c 
-	$(CC) server.c $(CFLAGS) -o server
+server.o: server.c
+	$(CC) $(CFLAGS) -c server.c
 
 clean:
-	rm -f client server *.o
+	rm -f my_client my_server *.o

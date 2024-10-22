@@ -4,6 +4,7 @@ Nicholas Anthony
 10/15/2024
 */
 #include "duckchat.h"
+#include "raw.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,25 +12,27 @@ Nicholas Anthony
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <pthread.h>
+#include <ctype.h>
 
 #define BUFFER_SIZE 1024
-#define MAX_NUM_CHANNELS 10 //setting max number of subscribed channels
+#define MAX_NUM_CHANNELS 100 //setting max number of subscribed channels
 
 // globals
 int sockfd;
 struct sockaddr_in server_addr;
 char active_channel[CHANNEL_MAX];
-int subscribed_channels[MAX_NUM_CHANNELS][CHANNEL_MAX];
+char subscribed_channels[MAX_NUM_CHANNELS][CHANNEL_MAX];
 int subscr_count = 0; // subscribed channel count
 char user_input[BUFFER_SIZE]; // save user input to display later
 
 // functions
+char *trim(char *str);
 void send_req(void *req, size_t req_size);
-void *receive(void *arg);
-void login(char *username);
-void logout();
+void *receive();
+int login(char *username);
+void logout(pthread_t recv_thread);
 void list_channels();
-void switch_channels();
+void switch_channels(char* channel);
 void join_channel(char *channel);
 void leave_channel(char *channel);
 void say(char *message);
@@ -54,18 +57,30 @@ void send_req(void *req, size_t req_size) {
 }
 
 // login with username
-void login(char *user){
+int login(char *user){
+    if (strlen(user) > USERNAME_MAX){
+        printf("username exceeds size limit. please shorten.\n");
+        return 1;
+    }
+
     struct request_login req;
     req.req_type = REQ_LOGIN;
+
     strncpy(req.req_username, user, USERNAME_MAX);
     send_req(&req, sizeof(req));
+    return 0;
 }
 
 //logout and quit
-void logout(){
+void logout(pthread_t recv_thread){
     struct request_logout req;
     req.req_type = REQ_LOGOUT;
     send_req(&req, sizeof(req));
+
+    // wait for thread to finish
+    pthread_cancel(recv_thread);
+    pthread_join(recv_thread, NULL);
+
     close(sockfd);
     exit(EXIT_SUCCESS);
 }
@@ -94,11 +109,17 @@ void switch_channels(char *channel){
     }
 
     strncpy(active_channel, channel, CHANNEL_MAX);
-    printf("Switched to channel: %s\n", channel);
+    //printf("Switched to channel: %s\n", channel);
 }
 
 // join channel request send
 void join_channel(char *channel){
+
+    if (strlen(channel) > CHANNEL_MAX){
+        printf("channel size exceeds max limit.\n");
+        return;
+    }
+
     struct request_join req;
     req.req_type = REQ_JOIN;
     strncpy(req.req_channel, channel, CHANNEL_MAX);
@@ -156,9 +177,15 @@ void leave_channel(char *channel) {
 }
 
 void say(char *message){
+    // error checking
     if (strlen(active_channel) == 0){
-                printf("You must be in a channel to send a message.\n");
-                return;
+        printf("you must be in a channel to send a message.\n");
+        return;
+    }
+
+    if (strlen(message) > SAY_MAX){
+        printf("message exceeds size limit.\n");
+        return;
     }
 
     struct request_say req;
@@ -177,16 +204,22 @@ void who(char *channel){
     send_req(&req, sizeof(req));
 }
 void display(const char *channel, const char *username, const char *message){
-    printf("\r\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"); // clear prev prompt/input
+    printf("\r");  // reset cursor
     printf("[%s][%s]: %s\n", channel, username, message);
-    printf("> %s", user_input); // display user input
+    printf("> %s", user_input);  // redisplay user input
+    fflush(stdout);
 }
+
 // receive here, to be done in a separate thread
-void *receive(void *arg) {
+void *receive() {
     char buffer[BUFFER_SIZE];
     socklen_t addr_len = sizeof(server_addr);
 
     while (1) {
+        //printf("Receiving on sockfd = %d\n", sockfd);
+        // check if thread is canceled
+        pthread_testcancel();
+
         ssize_t recv_len = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&server_addr, &addr_len);
         if (recv_len == -1) {
             perror("recvfrom");
@@ -204,37 +237,62 @@ void *receive(void *arg) {
             case TXT_LIST: {
                 struct text_list *txt_list = (struct text_list *)buffer;
                 printf("\r\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"); // clear
-                printf("Available channels:\n");
+                printf("Existing channels:\n");
                 for (int i = 0; i < txt_list->txt_nchannels; i++) {
-                    printf("- %s\n", txt_list->txt_channels[i].ch_channel);
+                    printf("\t%s\n", txt_list->txt_channels[i].ch_channel);
                 }
                 printf("> %s", user_input); // redisplay user input
+                fflush(stdout);
                 break;
             }
             case TXT_WHO: {
                 struct text_who *txt_who = (struct text_who *)buffer;
+
                 printf("\r\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"); // clear
-                printf("Users in channel %s:\n", txt_who->txt_channel);
+                printf("users on channel %s:\n", txt_who->txt_channel);
+
                 for (int i = 0; i < txt_who->txt_nusernames; i++) {
-                    printf("- %s\n", txt_who->txt_users[i].us_username);
+                    printf("\t%s\n", txt_who->txt_users[i].us_username);
                 }
                 printf("> %s", user_input); // redisplay user input
+                fflush(stdout);
                 break;
             }
             case TXT_ERROR: {
                 struct text_error *txt_error = (struct text_error *)buffer;
                 printf("\r\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"); // clear
-                printf("Error: %s\n", txt_error->txt_error);
+                printf("error: %s\n", txt_error->txt_error);
                 printf("> %s", user_input); // redisplay
+                fflush(stdout);
                 break;
             }
             default:
-                printf("Received unknown message type.\n");
+                printf("received unknown message type.\n");
                 break;
         }
     }
 }
+// credit: https://stackoverflow.com/questions/656542/trim-a-string-in-c
+char *trim(char *str) {
+    char *ptr;
+    if (!str)
+        return NULL;   // handle NULL string
+    if (!*str)
+        return str;      // handle empty string
+    for (ptr = str + strlen(str) - 1; (ptr >= str) && isspace(*ptr); --ptr);
+    ptr[1] = '\0';
+    return str;
+}
+
 int main(int argc, char *argv[]) {
+    /*
+    if (raw_mode() == -1){
+        perror("raw mode");
+        exit(1);
+    }
+
+    atexit(cooked_mode);
+    */
     if (argc != 4) {
         fprintf(stderr, "Usage: %s <server host> <port> <username>\n", argv[0]);
         exit(1);
@@ -243,14 +301,13 @@ int main(int argc, char *argv[]) {
     char *server_host = argv[1];
     int port = atoi(argv[2]);
     char *user = argv[3];
-
-    char buffer[BUFFER_SIZE];
     
     // create UDP socket
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         perror("Failed while creating socket. That socks...");
         exit(EXIT_FAILURE);
     }
+    //printf("socket created successfully (sockfd = %d).\n", sockfd);
 
     // set server addr
     memset(&server_addr, 0, sizeof(server_addr));
@@ -266,65 +323,103 @@ int main(int argc, char *argv[]) {
         perror("inet_pton");
         exit(1);
     }
-    // login before they can enter commands
-    login(user);
 
-    // join Common
-    join_channel("Common");
-
-    //start receive thread here (should change before login? yo no se)
     pthread_t recv_thread;
     if (pthread_create(&recv_thread, NULL, receive, NULL) != 0) {
         perror("pthread_create");
         exit(1);
     }
 
+    // login before they can enter commands
+    if (login(user) != 0){
+        printf("exiting...\n");
+        exit(1);
+    }
+
+    // join Common
+    join_channel("Common");
 
     // start loop to accept user input
     while (1){
         printf("> ");
-        char input[BUFFER_SIZE];
-        fgets(input, BUFFER_SIZE, stdin);
-        input[strcspn(input, "\n")] = 0; //remove trailing newline. credit: https://stackoverflow.com/questions/2693776/removing-trailing-newline-character-from-fgets-input
-        char* tok = strtok(input, " "); //tokenize input for parsing
-        
-        if (strcmp(tok[0],"/exit") == 0){
-            logout();
+        fflush(stdout);
+
+        char raw_input[BUFFER_SIZE];
+        char *trimmed_input;
+
+        fgets(raw_input, BUFFER_SIZE, stdin);
+        trimmed_input = trim(raw_input);
+
+        // if string is empty, continue since it's not sayable input
+        if (strlen(trimmed_input) == 0){
+            continue;
         }
-        else if (strcmp(tok[0],"/list") == 0){
+
+        // saving input before it gets sliced up by strtok
+        char saved_message[BUFFER_SIZE];
+        strncpy(saved_message, trimmed_input, BUFFER_SIZE);
+
+        char* tok = strtok(trimmed_input, " "); //tokenize input for parsing
+        
+        if (strcmp(tok,"/exit") == 0){
+            logout(recv_thread);
+        }
+        else if (strcmp(tok,"/list") == 0){
             list_channels();
         }
-        else if (strcmp(tok[0],"/join") == 0){
+        else if (strcmp(tok,"/join") == 0){
             char *channel = strtok(NULL, " ");
             if (channel != NULL){
-                join_channel(channel);
+                if (strlen(channel) > CHANNEL_MAX){
+                    printf("channel name exceeds size limit.\n");
+                }else{
+                    join_channel(channel);
+                }
+
             }else{
                 printf("Usage: /join <channel name>\n");
             }
         }
-        if (strcmp(tok[0],"/leave") == 0){
+        if (strcmp(tok,"/leave") == 0){
             char *channel = strtok(NULL, " ");
             if (channel != NULL){
-                leave_channel(channel);
+                if (strlen(channel) > CHANNEL_MAX){
+                    printf("channel name exceeds size limit.\n");
+                }else{
+                    leave_channel(channel);
+                }
             }else{
                 printf("Usage: /leave <channel name>\n");
             }
         }
-        else if (strcmp(tok[0],"/who") == 0){
+        else if (strcmp(tok,"/who") == 0){
             char *channel = strtok(NULL, " ");
             if (channel != NULL){
-                who(channel);
+                if (strlen(channel) > CHANNEL_MAX){
+                    printf("channel name exceeds size limit.\n");
+                }else{
+                    who(channel);
+                }
             }else{
                 printf("Usage: /who <channel name>\n");
             }
         }
-        else if (strcmp(tok[0],"/switch") == 0){
+        else if (strcmp(tok,"/switch") == 0){
             char *channel = strtok(NULL, " ");
-            switch_channels(channel);
+            if (strlen(channel) > CHANNEL_MAX){
+                    printf("channel name exceeds size limit.\n");
+                }else{
+                    switch_channels(channel);
+                }
         }
-        else{
-            say(input);
+        else if (tok[0] != '/'){
+            //printf("saying %s...\n", saved_message);
+            if (strlen(saved_message) > SAY_MAX){
+                printf("message length exceeds size limit.\n");
+            }else{
+                say(saved_message); 
+            }
+        }
     }
-    close(sockfd);
     return 0;
 }
