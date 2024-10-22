@@ -169,8 +169,11 @@ void leave_channel(char *channel) {
     // clear active channel and set active channel 
     if (strncmp(active_channel, channel, CHANNEL_MAX) == 0) {
         if (subscr_count > 0){ // set active channel to last subscribed channel
-            strncpy(active_channel, subscribed_channels[subscr_count], CHANNEL_MAX);
+            printf("channel %s left. active channel set to: %s\n",active_channel,subscribed_channels[subscr_count - 1]);
+            strncpy(active_channel, subscribed_channels[subscr_count - 1], CHANNEL_MAX);
+            
         }else{ // no channels left, active channel is unset
+            printf("channel %s left, no channels remaining. active channel is 0.\n", active_channel);
             memset(active_channel, 0, CHANNEL_MAX);
         }
     }
@@ -339,7 +342,7 @@ int main(int argc, char *argv[]) {
     // join Common
     join_channel("Common");
 
-    // start loop to accept user input
+    // user input loop
     while (1){
         printf("> ");
         fflush(stdout);
