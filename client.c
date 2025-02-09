@@ -1,7 +1,7 @@
 /*
-client.c - for CS 432 Project 2
+client.c 
 Nicholas Anthony
-10/22/2024 (same as project 1)
+10/22/2024 
 */
 #include "duckchat.h"
 #include "raw.h"
