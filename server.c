@@ -1,5 +1,5 @@
 /*
-server.c - for CS 432 Project 2
+server.c
 Nicholas Anthony
 11/30/2024
 */
